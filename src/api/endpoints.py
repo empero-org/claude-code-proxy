@@ -28,30 +28,39 @@ openai_client = OpenAIClient(
     custom_headers=custom_headers,
 )
 
-async def validate_api_key(x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)):
+
+async def validate_api_key(
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
     """Validate the client's API key from either x-api-key header or Authorization header."""
     client_api_key = None
-    
+
     # Extract API key from headers
     if x_api_key:
         client_api_key = x_api_key
     elif authorization and authorization.startswith("Bearer "):
         client_api_key = authorization.replace("Bearer ", "")
-    
+
     # Skip validation if ANTHROPIC_API_KEY is not set in the environment
     if not config.anthropic_api_key:
         return
-        
+
     # Validate the client API key
     if not client_api_key or not config.validate_client_api_key(client_api_key):
-        logger.warning(f"Invalid API key provided by client")
+        logger.warning("Invalid API key provided by client")
         raise HTTPException(
             status_code=401,
-            detail="Invalid API key. Please provide a valid Anthropic API key."
+            detail="Invalid API key. Please provide a valid Anthropic API key.",
         )
 
+
 @router.post("/v1/messages")
-async def create_message(request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)):
+async def create_message(
+    request: ClaudeMessagesRequest,
+    http_request: Request,
+    _: None = Depends(validate_api_key),
+):
     try:
         logger.debug(
             f"Processing Claude request: model={request.model}, stream={request.stream}"
@@ -68,7 +77,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             raise HTTPException(status_code=499, detail="Client disconnected")
 
         if request.stream:
-            # Streaming response - wrap in error handling
+            # Streaming response
             try:
                 openai_stream = openai_client.create_chat_completion_stream(
                     openai_request, request_id
@@ -91,10 +100,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                     },
                 )
             except HTTPException as e:
-                # Convert to proper error response for streaming
                 logger.error(f"Streaming error: {e.detail}")
                 import traceback
-
                 logger.error(traceback.format_exc())
                 error_message = openai_client.classify_openai_error(e.detail)
                 error_response = {
@@ -115,7 +122,6 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         raise
     except Exception as e:
         import traceback
-
         logger.error(f"Unexpected error processing request: {e}")
         logger.error(traceback.format_exc())
         error_message = openai_client.classify_openai_error(str(e))
@@ -123,11 +129,11 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
 
 @router.post("/v1/messages/count_tokens")
-async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)):
+async def count_tokens(
+    request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)
+):
     try:
-        # For token counting, we'll use a simple estimation
-        # In a real implementation, you might want to use tiktoken or similar
-
+        # Estimation-based token counting (no backend tokenizer available)
         total_chars = 0
 
         # Count system message characters
@@ -150,7 +156,7 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
                     if hasattr(block, "text") and block.text is not None:
                         total_chars += len(block.text)
 
-        # Rough estimation: 4 characters per token
+        # Rough estimation: ~4 characters per token
         estimated_tokens = max(1, total_chars // 4)
 
         return {"input_tokens": estimated_tokens}
@@ -162,7 +168,7 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint."""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -174,9 +180,8 @@ async def health_check():
 
 @router.get("/test-connection")
 async def test_connection():
-    """Test API connectivity to OpenAI"""
+    """Test API connectivity to OpenAI."""
     try:
-        # Simple test request to verify API connectivity
         test_response = await openai_client.create_chat_completion(
             {
                 "model": config.small_model,
@@ -213,9 +218,9 @@ async def test_connection():
 
 @router.get("/")
 async def root():
-    """Root endpoint"""
+    """Root endpoint."""
     return {
-        "message": "Claude-to-OpenAI API Proxy v1.0.0",
+        "message": "Claude-to-OpenAI API Proxy v2.0.0",
         "status": "running",
         "config": {
             "openai_base_url": config.openai_base_url,
@@ -223,6 +228,7 @@ async def root():
             "api_key_configured": bool(config.openai_api_key),
             "client_api_key_validation": bool(config.anthropic_api_key),
             "big_model": config.big_model,
+            "middle_model": config.middle_model,
             "small_model": config.small_model,
         },
         "endpoints": {
