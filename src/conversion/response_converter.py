@@ -157,9 +157,10 @@ async def convert_openai_streaming_to_claude(
                     # Handle tool call deltas
                     if "tool_calls" in delta:
                         for tc_delta in delta["tool_calls"]:
-                            yield from _process_tool_call_delta(
+                            for event in _process_tool_call_delta(
                                 tc_delta, current_tool_calls, text_block_index, tool_block_counter
-                            )
+                            ):
+                                yield event
                             # Update counter if new tool was started
                             tc_index = tc_delta.get("index", 0)
                             if tc_index in current_tool_calls and current_tool_calls[tc_index].get("started"):
