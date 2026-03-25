@@ -1,22 +1,30 @@
-# Constants for better maintainability  
+# Constants for better maintainability
 class Constants:
     ROLE_USER = "user"
     ROLE_ASSISTANT = "assistant"
     ROLE_SYSTEM = "system"
     ROLE_TOOL = "tool"
-    
+
     CONTENT_TEXT = "text"
     CONTENT_IMAGE = "image"
+    CONTENT_DOCUMENT = "document"
     CONTENT_TOOL_USE = "tool_use"
     CONTENT_TOOL_RESULT = "tool_result"
-    
+    CONTENT_THINKING = "thinking"
+    CONTENT_REDACTED_THINKING = "redacted_thinking"
+    CONTENT_SERVER_TOOL_USE = "server_tool_use"
+    CONTENT_SEARCH_RESULT = "search_result"
+    CONTENT_CONTAINER_UPLOAD = "container_upload"
+
     TOOL_FUNCTION = "function"
-    
+
     STOP_END_TURN = "end_turn"
     STOP_MAX_TOKENS = "max_tokens"
+    STOP_STOP_SEQUENCE = "stop_sequence"
     STOP_TOOL_USE = "tool_use"
+    STOP_PAUSE_TURN = "pause_turn"
     STOP_ERROR = "error"
-    
+
     EVENT_MESSAGE_START = "message_start"
     EVENT_MESSAGE_STOP = "message_stop"
     EVENT_MESSAGE_DELTA = "message_delta"
@@ -24,6 +32,10 @@ class Constants:
     EVENT_CONTENT_BLOCK_STOP = "content_block_stop"
     EVENT_CONTENT_BLOCK_DELTA = "content_block_delta"
     EVENT_PING = "ping"
-    
+    EVENT_ERROR = "error"
+
     DELTA_TEXT = "text_delta"
     DELTA_INPUT_JSON = "input_json_delta"
+    DELTA_THINKING = "thinking_delta"
+    DELTA_SIGNATURE = "signature_delta"
+    DELTA_CITATIONS = "citations_delta"
