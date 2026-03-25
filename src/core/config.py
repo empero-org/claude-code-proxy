@@ -18,8 +18,8 @@ class Config:
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
         self.log_level = os.environ.get("LOG_LEVEL", "INFO")
-        self.max_tokens_limit = int(os.environ.get("MAX_TOKENS_LIMIT", "4096"))
-        self.min_tokens_limit = int(os.environ.get("MIN_TOKENS_LIMIT", "100"))
+        self.max_tokens_limit = int(os.environ.get("MAX_TOKENS_LIMIT", "128000"))
+        self.min_tokens_limit = int(os.environ.get("MIN_TOKENS_LIMIT", "1024"))
         
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
@@ -31,13 +31,9 @@ class Config:
         self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
         
     def validate_api_key(self):
-        """Basic API key validation"""
-        if not self.openai_api_key:
-            return False
-        # Basic format check for OpenAI API keys
-        if not self.openai_api_key.startswith('sk-'):
-            return False
-        return True
+        """Basic API key validation — accepts any non-empty key
+        to support OpenAI, Azure, and other compatible backends."""
+        return bool(self.openai_api_key and self.openai_api_key.strip())
         
     def validate_client_api_key(self, client_api_key):
         """Validate client's Anthropic API key"""
