@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from datetime import datetime
 import uuid
 from typing import Optional
@@ -55,12 +55,34 @@ async def validate_api_key(
         )
 
 
-@router.post("/v1/messages")
-async def create_message(
+# ---------------------------------------------------------------------------
+# Health / connectivity probes
+# Claude Code sends HEAD /v1 to verify the API is reachable before POSTing.
+# ---------------------------------------------------------------------------
+
+@router.head("/v1")
+@router.get("/v1")
+@router.head("/v1/")
+@router.get("/v1/")
+async def v1_health():
+    """Health probe — Claude Code sends HEAD /v1 to check connectivity."""
+    return Response(status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# Messages endpoint — mounted at both /v1/messages and /v1/v1/messages
+# so the proxy works regardless of whether ANTHROPIC_BASE_URL includes /v1.
+#
+# The Anthropic SDK appends /v1/messages to the base URL, so:
+#   base_url=http://host:8082       → POST /v1/messages       ✓
+#   base_url=http://host:8082/v1    → POST /v1/v1/messages    ✓
+# ---------------------------------------------------------------------------
+
+async def _handle_message(
     request: ClaudeMessagesRequest,
     http_request: Request,
-    _: None = Depends(validate_api_key),
 ):
+    """Core message handler shared by both route prefixes."""
     try:
         logger.debug(
             f"Processing Claude request: model={request.model}, stream={request.stream}"
@@ -133,15 +155,32 @@ async def create_message(
         raise HTTPException(status_code=500, detail=error_message)
 
 
-@router.post("/v1/messages/count_tokens")
-async def count_tokens(
-    request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)
+@router.post("/v1/messages")
+async def create_message(
+    request: ClaudeMessagesRequest,
+    http_request: Request,
+    _: None = Depends(validate_api_key),
 ):
-    try:
-        # Estimation-based token counting (no backend tokenizer available)
-        total_chars = 0
+    return await _handle_message(request, http_request)
 
-        # Count system message characters
+
+@router.post("/v1/v1/messages")
+async def create_message_double_prefix(
+    request: ClaudeMessagesRequest,
+    http_request: Request,
+    _: None = Depends(validate_api_key),
+):
+    """Handles the double /v1/v1/messages path when ANTHROPIC_BASE_URL includes /v1."""
+    return await _handle_message(request, http_request)
+
+
+# ---------------------------------------------------------------------------
+# Token counting — also at both prefixes
+# ---------------------------------------------------------------------------
+
+async def _handle_count_tokens(request: ClaudeTokenCountRequest):
+    try:
+        total_chars = 0
         if request.system:
             if isinstance(request.system, str):
                 total_chars += len(request.system)
@@ -149,8 +188,6 @@ async def count_tokens(
                 for block in request.system:
                     if hasattr(block, "text"):
                         total_chars += len(block.text)
-
-        # Count message characters
         for msg in request.messages:
             if msg.content is None:
                 continue
@@ -160,16 +197,30 @@ async def count_tokens(
                 for block in msg.content:
                     if hasattr(block, "text") and block.text is not None:
                         total_chars += len(block.text)
-
-        # Rough estimation: ~4 characters per token
         estimated_tokens = max(1, total_chars // 4)
-
         return {"input_tokens": estimated_tokens}
-
     except Exception as e:
         logger.error(f"Error counting tokens: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/v1/messages/count_tokens")
+async def count_tokens(
+    request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)
+):
+    return await _handle_count_tokens(request)
+
+
+@router.post("/v1/v1/messages/count_tokens")
+async def count_tokens_double_prefix(
+    request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)
+):
+    return await _handle_count_tokens(request)
+
+
+# ---------------------------------------------------------------------------
+# Utility endpoints
+# ---------------------------------------------------------------------------
 
 @router.get("/health")
 async def health_check():
@@ -221,6 +272,7 @@ async def test_connection():
         )
 
 
+@router.head("/")
 @router.get("/")
 async def root():
     """Root endpoint."""
