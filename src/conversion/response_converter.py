@@ -39,7 +39,7 @@ def convert_openai_to_claude_response(
             content_blocks.append(
                 {
                     "type": Constants.CONTENT_TOOL_USE,
-                    "id": tool_call.get("id", f"tool_{uuid.uuid4()}"),
+                    "id": tool_call.get("id", f"toolu_{uuid.uuid4().hex[:24]}"),
                     "name": function_data.get("name", ""),
                     "input": arguments,
                 }
@@ -58,21 +58,30 @@ def convert_openai_to_claude_response(
         "function_call": Constants.STOP_TOOL_USE,
     }.get(finish_reason, Constants.STOP_END_TURN)
 
+    # Build usage
+    raw_usage = openai_response.get("usage", {})
+    usage = {
+        "input_tokens": raw_usage.get("prompt_tokens", 0),
+        "output_tokens": raw_usage.get("completion_tokens", 0),
+    }
+    # Add cache tokens if available
+    prompt_details = raw_usage.get("prompt_tokens_details", {})
+    if prompt_details:
+        cached = prompt_details.get("cached_tokens", 0)
+        if cached:
+            usage["cache_read_input_tokens"] = cached
+            usage["cache_creation_input_tokens"] = 0
+
     # Build Claude response
     claude_response = {
-        "id": openai_response.get("id", f"msg_{uuid.uuid4()}"),
+        "id": openai_response.get("id", f"msg_{uuid.uuid4().hex[:24]}"),
         "type": "message",
         "role": Constants.ROLE_ASSISTANT,
         "model": original_request.model,
         "content": content_blocks,
         "stop_reason": stop_reason,
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": openai_response.get("usage", {}).get("prompt_tokens", 0),
-            "output_tokens": openai_response.get("usage", {}).get(
-                "completion_tokens", 0
-            ),
-        },
+        "usage": usage,
     }
 
     return claude_response
@@ -86,17 +95,34 @@ async def convert_openai_streaming_to_claude(
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
 
     # Send initial SSE events
-    yield f"event: {Constants.EVENT_MESSAGE_START}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_START, 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'model': original_request.model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_MESSAGE_START, {
+        "type": Constants.EVENT_MESSAGE_START,
+        "message": {
+            "id": message_id,
+            "type": "message",
+            "role": Constants.ROLE_ASSISTANT,
+            "model": original_request.model,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    })
 
-    yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': 0, 'content_block': {'type': Constants.CONTENT_TEXT, 'text': ''}}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_CONTENT_BLOCK_START, {
+        "type": Constants.EVENT_CONTENT_BLOCK_START,
+        "index": 0,
+        "content_block": {"type": Constants.CONTENT_TEXT, "text": ""},
+    })
 
-    yield f"event: {Constants.EVENT_PING}\ndata: {json.dumps({'type': Constants.EVENT_PING}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_PING, {"type": Constants.EVENT_PING})
 
     # Process streaming chunks
     text_block_index = 0
     tool_block_counter = 0
     current_tool_calls = {}
     final_stop_reason = Constants.STOP_END_TURN
+    has_text_content = False
 
     try:
         async for line in openai_stream:
@@ -112,9 +138,7 @@ async def convert_openai_streaming_to_claude(
                         if not choices:
                             continue
                     except json.JSONDecodeError as e:
-                        logger.warning(
-                            f"Failed to parse chunk: {chunk_data}, error: {e}"
-                        )
+                        logger.warning(f"Failed to parse chunk: {chunk_data}, error: {e}")
                         continue
 
                     choice = choices[0]
@@ -123,94 +147,61 @@ async def convert_openai_streaming_to_claude(
 
                     # Handle text delta
                     if delta and "content" in delta and delta["content"] is not None:
-                        yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': delta['content']}}, ensure_ascii=False)}\n\n"
+                        has_text_content = True
+                        yield _sse(Constants.EVENT_CONTENT_BLOCK_DELTA, {
+                            "type": Constants.EVENT_CONTENT_BLOCK_DELTA,
+                            "index": text_block_index,
+                            "delta": {"type": Constants.DELTA_TEXT, "text": delta["content"]},
+                        })
 
-                    # Handle tool call deltas with improved incremental processing
+                    # Handle tool call deltas
                     if "tool_calls" in delta:
                         for tc_delta in delta["tool_calls"]:
+                            yield from _process_tool_call_delta(
+                                tc_delta, current_tool_calls, text_block_index, tool_block_counter
+                            )
+                            # Update counter if new tool was started
                             tc_index = tc_delta.get("index", 0)
-                            
-                            # Initialize tool call tracking by index if not exists
-                            if tc_index not in current_tool_calls:
-                                current_tool_calls[tc_index] = {
-                                    "id": None,
-                                    "name": None,
-                                    "args_buffer": "",
-                                    "json_sent": False,
-                                    "claude_index": None,
-                                    "started": False
-                                }
-                            
-                            tool_call = current_tool_calls[tc_index]
-                            
-                            # Update tool call ID if provided
-                            if tc_delta.get("id"):
-                                tool_call["id"] = tc_delta["id"]
-                            
-                            # Update function name and start content block if we have both id and name
-                            function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
-                            if function_data.get("name"):
-                                tool_call["name"] = function_data["name"]
-                            
-                            # Start content block when we have complete initial data
-                            if (tool_call["id"] and tool_call["name"] and not tool_call["started"]):
-                                tool_block_counter += 1
-                                claude_index = text_block_index + tool_block_counter
-                                tool_call["claude_index"] = claude_index
-                                tool_call["started"] = True
-                                
-                                yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}}, ensure_ascii=False)}\n\n"
-                            
-                            # Handle function arguments
-                            if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
-                                tool_call["args_buffer"] += function_data["arguments"]
-                                
-                                # Try to parse complete JSON and send delta when we have valid JSON
-                                try:
-                                    json.loads(tool_call["args_buffer"])
-                                    # If parsing succeeds and we haven't sent this JSON yet
-                                    if not tool_call["json_sent"]:
-                                        yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': tool_call['claude_index'], 'delta': {'type': Constants.DELTA_INPUT_JSON, 'partial_json': tool_call['args_buffer']}}, ensure_ascii=False)}\n\n"
-                                        tool_call["json_sent"] = True
-                                except json.JSONDecodeError:
-                                    # JSON is incomplete, continue accumulating
-                                    pass
+                            if tc_index in current_tool_calls and current_tool_calls[tc_index].get("started"):
+                                tool_block_counter = max(
+                                    tool_block_counter,
+                                    current_tool_calls[tc_index]["claude_index"] - text_block_index,
+                                )
 
                     # Handle finish reason
                     if finish_reason:
-                        if finish_reason == "length":
-                            final_stop_reason = Constants.STOP_MAX_TOKENS
-                        elif finish_reason in ["tool_calls", "function_call"]:
-                            final_stop_reason = Constants.STOP_TOOL_USE
-                        elif finish_reason == "stop":
-                            final_stop_reason = Constants.STOP_END_TURN
-                        else:
-                            final_stop_reason = Constants.STOP_END_TURN
+                        final_stop_reason = _map_finish_reason(finish_reason)
                         break
 
     except Exception as e:
-        # Handle any streaming errors gracefully
         logger.error(f"Streaming error: {e}")
         import traceback
-
         logger.error(traceback.format_exc())
-        error_event = {
+        yield _sse(Constants.EVENT_ERROR, {
             "type": "error",
             "error": {"type": "api_error", "message": f"Streaming error: {str(e)}"},
-        }
-        yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+        })
         return
 
     # Send final SSE events
-    yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': text_block_index}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_CONTENT_BLOCK_STOP, {
+        "type": Constants.EVENT_CONTENT_BLOCK_STOP,
+        "index": text_block_index,
+    })
 
     for tool_data in current_tool_calls.values():
         if tool_data.get("started") and tool_data.get("claude_index") is not None:
-            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': tool_data['claude_index']}, ensure_ascii=False)}\n\n"
+            yield _sse(Constants.EVENT_CONTENT_BLOCK_STOP, {
+                "type": Constants.EVENT_CONTENT_BLOCK_STOP,
+                "index": tool_data["claude_index"],
+            })
 
-    usage_data = {"input_tokens": 0, "output_tokens": 0}
-    yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': final_stop_reason, 'stop_sequence': None}, 'usage': usage_data}, ensure_ascii=False)}\n\n"
-    yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_MESSAGE_DELTA, {
+        "type": Constants.EVENT_MESSAGE_DELTA,
+        "delta": {"stop_reason": final_stop_reason, "stop_sequence": None},
+        "usage": {"output_tokens": 0},
+    })
+    yield _sse(Constants.EVENT_MESSAGE_STOP, {"type": Constants.EVENT_MESSAGE_STOP})
 
 
 async def convert_openai_streaming_to_claude_with_cancellation(
@@ -226,11 +217,27 @@ async def convert_openai_streaming_to_claude_with_cancellation(
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
 
     # Send initial SSE events
-    yield f"event: {Constants.EVENT_MESSAGE_START}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_START, 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'model': original_request.model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_MESSAGE_START, {
+        "type": Constants.EVENT_MESSAGE_START,
+        "message": {
+            "id": message_id,
+            "type": "message",
+            "role": Constants.ROLE_ASSISTANT,
+            "model": original_request.model,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    })
 
-    yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': 0, 'content_block': {'type': Constants.CONTENT_TEXT, 'text': ''}}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_CONTENT_BLOCK_START, {
+        "type": Constants.EVENT_CONTENT_BLOCK_START,
+        "index": 0,
+        "content_block": {"type": Constants.CONTENT_TEXT, "text": ""},
+    })
 
-    yield f"event: {Constants.EVENT_PING}\ndata: {json.dumps({'type': Constants.EVENT_PING}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_PING, {"type": Constants.EVENT_PING})
 
     # Process streaming chunks
     text_block_index = 0
@@ -255,25 +262,17 @@ async def convert_openai_streaming_to_claude_with_cancellation(
 
                     try:
                         chunk = json.loads(chunk_data)
-                        # logger.info(f"OpenAI chunk: {chunk}")
-                        usage = chunk.get("usage", None)
-                        if usage:
-                            cache_read_input_tokens = 0
-                            prompt_tokens_details = usage.get('prompt_tokens_details', {})
-                            if prompt_tokens_details:
-                                cache_read_input_tokens = prompt_tokens_details.get('cached_tokens', 0)
-                            usage_data = {
-                                'input_tokens': usage.get('prompt_tokens', 0),
-                                'output_tokens': usage.get('completion_tokens', 0),
-                                'cache_read_input_tokens': cache_read_input_tokens
-                            }
+
+                        # Extract usage from chunk if present
+                        raw_usage = chunk.get("usage")
+                        if raw_usage:
+                            usage_data = _extract_usage(raw_usage)
+
                         choices = chunk.get("choices", [])
                         if not choices:
                             continue
                     except json.JSONDecodeError as e:
-                        logger.warning(
-                            f"Failed to parse chunk: {chunk_data}, error: {e}"
-                        )
+                        logger.warning(f"Failed to parse chunk: {chunk_data}, error: {e}")
                         continue
 
                     choice = choices[0]
@@ -282,104 +281,160 @@ async def convert_openai_streaming_to_claude_with_cancellation(
 
                     # Handle text delta
                     if delta and "content" in delta and delta["content"] is not None:
-                        yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': delta['content']}}, ensure_ascii=False)}\n\n"
+                        yield _sse(Constants.EVENT_CONTENT_BLOCK_DELTA, {
+                            "type": Constants.EVENT_CONTENT_BLOCK_DELTA,
+                            "index": text_block_index,
+                            "delta": {"type": Constants.DELTA_TEXT, "text": delta["content"]},
+                        })
 
-                    # Handle tool call deltas with improved incremental processing
+                    # Handle tool call deltas
                     if "tool_calls" in delta and delta["tool_calls"]:
                         for tc_delta in delta["tool_calls"]:
+                            for event in _process_tool_call_delta(
+                                tc_delta, current_tool_calls, text_block_index, tool_block_counter
+                            ):
+                                yield event
+                            # Update counter if new tool was started
                             tc_index = tc_delta.get("index", 0)
-                            
-                            # Initialize tool call tracking by index if not exists
-                            if tc_index not in current_tool_calls:
-                                current_tool_calls[tc_index] = {
-                                    "id": None,
-                                    "name": None,
-                                    "args_buffer": "",
-                                    "json_sent": False,
-                                    "claude_index": None,
-                                    "started": False
-                                }
-                            
-                            tool_call = current_tool_calls[tc_index]
-                            
-                            # Update tool call ID if provided
-                            if tc_delta.get("id"):
-                                tool_call["id"] = tc_delta["id"]
-                            
-                            # Update function name and start content block if we have both id and name
-                            function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
-                            if function_data.get("name"):
-                                tool_call["name"] = function_data["name"]
-                            
-                            # Start content block when we have complete initial data
-                            if (tool_call["id"] and tool_call["name"] and not tool_call["started"]):
-                                tool_block_counter += 1
-                                claude_index = text_block_index + tool_block_counter
-                                tool_call["claude_index"] = claude_index
-                                tool_call["started"] = True
-                                
-                                yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}}, ensure_ascii=False)}\n\n"
-                            
-                            # Handle function arguments
-                            if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
-                                tool_call["args_buffer"] += function_data["arguments"]
-                                
-                                # Try to parse complete JSON and send delta when we have valid JSON
-                                try:
-                                    json.loads(tool_call["args_buffer"])
-                                    # If parsing succeeds and we haven't sent this JSON yet
-                                    if not tool_call["json_sent"]:
-                                        yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': tool_call['claude_index'], 'delta': {'type': Constants.DELTA_INPUT_JSON, 'partial_json': tool_call['args_buffer']}}, ensure_ascii=False)}\n\n"
-                                        tool_call["json_sent"] = True
-                                except json.JSONDecodeError:
-                                    # JSON is incomplete, continue accumulating
-                                    pass
+                            if tc_index in current_tool_calls and current_tool_calls[tc_index].get("started"):
+                                tool_block_counter = max(
+                                    tool_block_counter,
+                                    current_tool_calls[tc_index]["claude_index"] - text_block_index,
+                                )
 
                     # Handle finish reason
                     if finish_reason:
-                        if finish_reason == "length":
-                            final_stop_reason = Constants.STOP_MAX_TOKENS
-                        elif finish_reason in ["tool_calls", "function_call"]:
-                            final_stop_reason = Constants.STOP_TOOL_USE
-                        elif finish_reason == "stop":
-                            final_stop_reason = Constants.STOP_END_TURN
-                        else:
-                            final_stop_reason = Constants.STOP_END_TURN
+                        final_stop_reason = _map_finish_reason(finish_reason)
 
     except HTTPException as e:
-        # Handle cancellation
         if e.status_code == 499:
             logger.info(f"Request {request_id} was cancelled")
-            error_event = {
+            yield _sse(Constants.EVENT_ERROR, {
                 "type": "error",
-                "error": {
-                    "type": "cancelled",
-                    "message": "Request was cancelled by client",
-                },
-            }
-            yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                "error": {"type": "cancelled", "message": "Request was cancelled by client"},
+            })
             return
         else:
             raise
     except Exception as e:
-        # Handle any streaming errors gracefully
         logger.error(f"Streaming error: {e}")
         import traceback
-
         logger.error(traceback.format_exc())
-        error_event = {
+        yield _sse(Constants.EVENT_ERROR, {
             "type": "error",
             "error": {"type": "api_error", "message": f"Streaming error: {str(e)}"},
-        }
-        yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+        })
         return
 
     # Send final SSE events
-    yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': text_block_index}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_CONTENT_BLOCK_STOP, {
+        "type": Constants.EVENT_CONTENT_BLOCK_STOP,
+        "index": text_block_index,
+    })
 
     for tool_data in current_tool_calls.values():
         if tool_data.get("started") and tool_data.get("claude_index") is not None:
-            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': tool_data['claude_index']}, ensure_ascii=False)}\n\n"
+            yield _sse(Constants.EVENT_CONTENT_BLOCK_STOP, {
+                "type": Constants.EVENT_CONTENT_BLOCK_STOP,
+                "index": tool_data["claude_index"],
+            })
 
-    yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': final_stop_reason, 'stop_sequence': None}, 'usage': usage_data}, ensure_ascii=False)}\n\n"
-    yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
+    yield _sse(Constants.EVENT_MESSAGE_DELTA, {
+        "type": Constants.EVENT_MESSAGE_DELTA,
+        "delta": {"stop_reason": final_stop_reason, "stop_sequence": None},
+        "usage": usage_data,
+    })
+    yield _sse(Constants.EVENT_MESSAGE_STOP, {"type": Constants.EVENT_MESSAGE_STOP})
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _sse(event: str, data: dict) -> str:
+    """Format a single SSE event."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _map_finish_reason(finish_reason: str) -> str:
+    """Map OpenAI finish_reason to Claude stop_reason."""
+    return {
+        "stop": Constants.STOP_END_TURN,
+        "length": Constants.STOP_MAX_TOKENS,
+        "tool_calls": Constants.STOP_TOOL_USE,
+        "function_call": Constants.STOP_TOOL_USE,
+    }.get(finish_reason, Constants.STOP_END_TURN)
+
+
+def _extract_usage(raw_usage: dict) -> dict:
+    """Extract usage from an OpenAI usage object into Claude format."""
+    usage = {
+        "input_tokens": raw_usage.get("prompt_tokens", 0),
+        "output_tokens": raw_usage.get("completion_tokens", 0),
+    }
+    prompt_details = raw_usage.get("prompt_tokens_details", {})
+    if prompt_details:
+        cached = prompt_details.get("cached_tokens", 0)
+        if cached:
+            usage["cache_read_input_tokens"] = cached
+            usage["cache_creation_input_tokens"] = 0
+    return usage
+
+
+def _process_tool_call_delta(tc_delta, current_tool_calls, text_block_index, tool_block_counter):
+    """Process a single tool call delta and yield SSE events."""
+    tc_index = tc_delta.get("index", 0)
+
+    # Initialize tool call tracking by index if not exists
+    if tc_index not in current_tool_calls:
+        current_tool_calls[tc_index] = {
+            "id": None,
+            "name": None,
+            "args_buffer": "",
+            "claude_index": None,
+            "started": False,
+        }
+
+    tool_call = current_tool_calls[tc_index]
+
+    # Update tool call ID if provided
+    if tc_delta.get("id"):
+        tool_call["id"] = tc_delta["id"]
+
+    # Update function name
+    function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
+    if function_data.get("name"):
+        tool_call["name"] = function_data["name"]
+
+    # Start content block when we have complete initial data
+    if tool_call["id"] and tool_call["name"] and not tool_call["started"]:
+        tool_block_counter += 1
+        claude_index = text_block_index + tool_block_counter
+        tool_call["claude_index"] = claude_index
+        tool_call["started"] = True
+
+        yield _sse(Constants.EVENT_CONTENT_BLOCK_START, {
+            "type": Constants.EVENT_CONTENT_BLOCK_START,
+            "index": claude_index,
+            "content_block": {
+                "type": Constants.CONTENT_TOOL_USE,
+                "id": tool_call["id"],
+                "name": tool_call["name"],
+                "input": {},
+            },
+        })
+
+    # Handle function arguments — stream as partial_json incrementally
+    if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
+        new_fragment = function_data["arguments"]
+        tool_call["args_buffer"] += new_fragment
+
+        # Send incremental partial_json delta for each fragment
+        yield _sse(Constants.EVENT_CONTENT_BLOCK_DELTA, {
+            "type": Constants.EVENT_CONTENT_BLOCK_DELTA,
+            "index": tool_call["claude_index"],
+            "delta": {
+                "type": Constants.DELTA_INPUT_JSON,
+                "partial_json": new_fragment,
+            },
+        })
