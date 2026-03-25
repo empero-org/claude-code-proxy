@@ -1,11 +1,8 @@
-"""Claude Code Proxy
-
-A proxy server that enables Claude Code to work with OpenAI-compatible API providers.
-"""
+"""Claude Code Proxy — Anthropic API to OpenAI-compatible backend proxy."""
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
-__version__ = "1.0.0"
-__author__ = "Claude Code Proxy"
+
+__version__ = "0.1.0"
+__author__ = "L. Lehmann (kodee2k) — Empero AI"

@@ -4,14 +4,14 @@ import uvicorn
 import sys
 from src.core.config import config
 
-app = FastAPI(title="Claude-to-OpenAI API Proxy", version="2.0.0")
+app = FastAPI(title="Claude-to-OpenAI API Proxy", version="0.1.0")
 
 app.include_router(api_router)
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
-        print("Claude-to-OpenAI API Proxy v2.0.0")
+        print("Claude-to-OpenAI API Proxy v0.1.0")
         print()
         print("Usage: python src/main.py")
         print()
@@ -46,7 +46,7 @@ def main():
         sys.exit(0)
 
     # Configuration summary
-    print("Claude-to-OpenAI API Proxy v2.0.0")
+    print("Claude-to-OpenAI API Proxy v0.1.0")
     print(f"Configuration loaded successfully")
     print(f"   OpenAI Base URL: {config.openai_base_url}")
     print(f"   Big Model (opus):   {config.big_model}")

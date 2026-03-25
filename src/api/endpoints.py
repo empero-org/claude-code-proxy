@@ -223,7 +223,7 @@ async def test_connection():
 async def root():
     """Root endpoint."""
     return {
-        "message": "Claude-to-OpenAI API Proxy v2.0.0",
+        "message": "Claude-to-OpenAI API Proxy v0.1.0",
         "status": "running",
         "config": {
             "openai_base_url": config.openai_base_url,

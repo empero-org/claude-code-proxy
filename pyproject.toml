@@ -4,22 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-proxy"
-version = "1.0.0"
-description = "Proxy server enabling Claude Code to work with OpenAI-compatible API providers"
+version = "0.1.0"
+description = "Proxy enabling Claude Code to work with any OpenAI-compatible backend — full 2026 Anthropic API support"
 readme = "README.md"
+license = "MIT"
 authors = [
-    {name = "Claude Code Proxy", email = "noreply@example.com"}
+    {name = "L. Lehmann (kodee2k)", email = "dev@empero.ai"}
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 requires-python = ">=3.9"
 dependencies = [
@@ -38,9 +39,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/holegots/claude-code-proxy"
-Repository = "https://github.com/holegots/claude-code-proxy.git"
-Issues = "https://github.com/holegots/claude-code-proxy/issues"
+Homepage = "https://empero.ai"
 
 [project.scripts]
 claude-code-proxy = "src.main:main"
@@ -52,12 +51,11 @@ dev-dependencies = [
     "black>=23.0.0",
     "isort>=5.12.0",
     "mypy>=1.0.0",
-    "pyinstaller>=6.15.0",
 ]
 
 [tool.black]
 line-length = 100
-target-version = ['py38']
+target-version = ['py39']
 
 [tool.isort]
 profile = "black"
@@ -70,4 +68,3 @@ packages = ["src"]
 python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true

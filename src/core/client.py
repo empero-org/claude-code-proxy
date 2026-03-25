@@ -17,7 +17,7 @@ class OpenAIClient:
         # Prepare default headers
         default_headers = {
             "Content-Type": "application/json",
-            "User-Agent": "claude-proxy/1.0.0"
+            "User-Agent": "claude-proxy/0.1.0"
         }
         
         # Merge custom headers with default headers
