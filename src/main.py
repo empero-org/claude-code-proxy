@@ -34,6 +34,8 @@ def main():
         print(f"  MAX_TOKENS_LIMIT - Max output token limit (default: 128000)")
         print(f"  MIN_TOKENS_LIMIT - Min output token limit (default: 1024)")
         print(f"  REQUEST_TIMEOUT - Request timeout in seconds (default: 90)")
+        print(f"  PROMPT_COMPRESSION - none / compact / summarize (default: none)")
+        print(f"  PROMPT_MAX_SYSTEM_TOKENS - Token budget for compressed prompt (default: 4096)")
         print()
         print("Model mapping:")
         print(f"  Claude haiku models  -> {config.small_model}")
@@ -58,6 +60,11 @@ def main():
     print(
         f"   Client API Key Validation: {'Enabled' if config.anthropic_api_key else 'Disabled'}"
     )
+    if config.prompt_compression != "none":
+        print(
+            f"   Prompt Compression: {config.prompt_compression} "
+            f"(budget: {config.prompt_max_system_tokens} tokens)"
+        )
     print()
 
     # Parse log level

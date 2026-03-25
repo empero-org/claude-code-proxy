@@ -31,6 +31,7 @@ Claude Code / Anthropic SDK          This Proxy               Any OpenAI-compati
 - **Client auth** — optional API key gating via `ANTHROPIC_API_KEY`
 - **Azure support** — set `AZURE_API_VERSION` to enable Azure OpenAI mode
 - **Custom headers** — inject arbitrary headers via `CUSTOM_HEADER_*` env vars
+- **Prompt compression** — optional system prompt compaction for smaller models (`compact` or `summarize` modes)
 - **Cache token tracking** — maps OpenAI `cached_tokens` → Claude `cache_read_input_tokens`
 - **Request cancellation** — client disconnect cancels the upstream request
 - **Forward-compatible** — `extra="allow"` on models, unknown fields pass through without 422
@@ -109,6 +110,42 @@ All config is via environment variables (auto-loaded from `.env`).
 | `MAX_TOKENS_LIMIT` | `128000` | Fallback max output tokens (used when backend doesn't report model limits) |
 | `MIN_TOKENS_LIMIT` | `1024` | Floor for max_tokens (thinking requires ≥ 1024) |
 | `REQUEST_TIMEOUT` | `90` | Request timeout in seconds |
+| `PROMPT_COMPRESSION` | `none` | System prompt compression mode (see below) |
+| `PROMPT_MAX_SYSTEM_TOKENS` | `4096` | Token budget for compressed system prompt |
+
+### Prompt compression
+
+Claude Code sends very large system prompts (10K+ tokens) with behavioral instructions, tool usage guidelines, memory, and project context. This works great with GPT-4o or DeepSeek-V3, but can overwhelm smaller or local models.
+
+Set `PROMPT_COMPRESSION` to enable automatic compression:
+
+| Mode | Latency | How it works | Best for |
+|------|---------|--------------|----------|
+| `none` | 0 | Pass through verbatim | GPT-4o, DeepSeek-V3, large models |
+| `compact` | ~0 | Rule-based: strips Claude Code boilerplate, collapses whitespace, caps at `PROMPT_MAX_SYSTEM_TOKENS` | Ollama, small/medium models |
+| `summarize` | +1 API call | Uses the backend model to condense the prompt, then falls back to compact if it fails | Very small context windows |
+
+**What gets compressed:**
+- Claude Code's verbose behavioral instructions (tone, style, tool usage guidelines)
+- Auto-memory system instructions
+- VSCode extension context boilerplate
+- Redundant whitespace and formatting
+
+**What stays untouched:**
+- Tool schemas (models need exact JSON to function-call)
+- Environment info (OS, shell, working directory)
+- Project-specific context (CLAUDE.md content, file paths)
+- User messages — never modified
+
+**Example: Ollama with compact mode**
+```bash
+OPENAI_API_KEY="dummy"
+OPENAI_BASE_URL="http://localhost:11434/v1"
+BIG_MODEL="llama3.1:70b"
+SMALL_MODEL="llama3.1:8b"
+PROMPT_COMPRESSION="compact"
+PROMPT_MAX_SYSTEM_TOKENS="4096"
+```
 
 ### Provider examples
 

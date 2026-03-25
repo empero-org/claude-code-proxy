@@ -73,7 +73,9 @@ async def create_message(
         request_id = str(uuid.uuid4())
 
         # Convert Claude request to OpenAI format
-        openai_request = convert_claude_to_openai(request, model_manager)
+        openai_request = await convert_claude_to_openai(
+            request, model_manager, openai_client=openai_client
+        )
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():

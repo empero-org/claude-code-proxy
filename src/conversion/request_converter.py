@@ -1,16 +1,19 @@
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
+from src.conversion.prompt_compressor import compact_system_prompt, summarize_system_prompt
 
 logger = logging.getLogger(__name__)
 
 
-def convert_claude_to_openai(
-    claude_request: ClaudeMessagesRequest, model_manager
+async def convert_claude_to_openai(
+    claude_request: ClaudeMessagesRequest,
+    model_manager,
+    openai_client=None,
 ) -> Dict[str, Any]:
     """Convert Claude API request format to OpenAI format."""
 
@@ -38,8 +41,15 @@ def convert_claude_to_openai(
             system_text = "\n\n".join(text_parts)
 
         if system_text.strip():
+            system_text = system_text.strip()
+
+            # Apply prompt compression if configured
+            system_text = await _compress_system_prompt(
+                system_text, openai_model, openai_client
+            )
+
             openai_messages.append(
-                {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
+                {"role": Constants.ROLE_SYSTEM, "content": system_text}
             )
 
     # Process Claude messages
@@ -353,3 +363,30 @@ def parse_tool_result_content(content):
         return str(content)
     except Exception:
         return "Unparseable content"
+
+
+async def _compress_system_prompt(
+    system_text: str,
+    openai_model: str,
+    openai_client=None,
+) -> str:
+    """Apply prompt compression based on PROMPT_COMPRESSION config."""
+    mode = config.prompt_compression
+    if mode == "none":
+        return system_text
+
+    budget = config.prompt_max_system_tokens
+
+    if mode == "compact":
+        return compact_system_prompt(system_text, max_tokens=budget)
+
+    if mode == "summarize":
+        if openai_client is None:
+            logger.warning("PROMPT_COMPRESSION=summarize but no client available, "
+                           "falling back to compact")
+            return compact_system_prompt(system_text, max_tokens=budget)
+        return await summarize_system_prompt(
+            system_text, openai_client, openai_model, max_tokens=budget
+        )
+
+    return system_text

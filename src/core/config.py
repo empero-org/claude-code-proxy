@@ -29,6 +29,14 @@ class Config:
         self.big_model = os.environ.get("BIG_MODEL", "gpt-4o")
         self.middle_model = os.environ.get("MIDDLE_MODEL", self.big_model)
         self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
+
+        # Prompt compression settings
+        self.prompt_compression = os.environ.get("PROMPT_COMPRESSION", "none").lower()
+        if self.prompt_compression not in ("none", "compact", "summarize"):
+            print(f"Warning: PROMPT_COMPRESSION='{self.prompt_compression}' is invalid. "
+                  f"Using 'none'. Valid: none, compact, summarize")
+            self.prompt_compression = "none"
+        self.prompt_max_system_tokens = int(os.environ.get("PROMPT_MAX_SYSTEM_TOKENS", "4096"))
         
     def validate_api_key(self):
         """Basic API key validation — accepts any non-empty key
