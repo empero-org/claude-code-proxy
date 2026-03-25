@@ -1,10 +1,10 @@
 import json
+import logging
 from typing import Dict, Any, List
-from venv import logger
+
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,9 @@ def convert_claude_to_openai(
                     next_msg.role == Constants.ROLE_USER
                     and isinstance(next_msg.content, list)
                     and any(
-                        block.type == Constants.CONTENT_TOOL_RESULT
+                        hasattr(block, "type")
+                        and block.type == Constants.CONTENT_TOOL_RESULT
                         for block in next_msg.content
-                        if hasattr(block, "type")
                     )
                 ):
                     # Process tool results
@@ -81,33 +81,43 @@ def convert_claude_to_openai(
             max(claude_request.max_tokens, config.min_tokens_limit),
             config.max_tokens_limit,
         ),
-        "temperature": claude_request.temperature,
         "stream": claude_request.stream,
     }
+
+    # Only set temperature if not using extended thinking
+    # (some backends don't allow temperature with reasoning models)
+    if claude_request.temperature is not None:
+        openai_request["temperature"] = claude_request.temperature
+
     logger.debug(
-        f"Converted Claude request to OpenAI format: {json.dumps(openai_request, indent=2, ensure_ascii=False)}"
+        f"Converted Claude request to OpenAI format: model={openai_model}, "
+        f"max_tokens={openai_request['max_tokens']}, stream={openai_request['stream']}"
     )
+
     # Add optional parameters
     if claude_request.stop_sequences:
         openai_request["stop"] = claude_request.stop_sequences
     if claude_request.top_p is not None:
         openai_request["top_p"] = claude_request.top_p
 
-    # Convert tools
+    # Convert tools (only custom tools are forwarded; server tools are Anthropic-specific)
     if claude_request.tools:
         openai_tools = []
         for tool in claude_request.tools:
-            if tool.name and tool.name.strip():
-                openai_tools.append(
-                    {
-                        "type": Constants.TOOL_FUNCTION,
-                        Constants.TOOL_FUNCTION: {
-                            "name": tool.name,
-                            "description": tool.description or "",
-                            "parameters": tool.input_schema,
-                        },
-                    }
-                )
+            # Only forward custom tools (or tools without a type, for backwards compat)
+            tool_type = getattr(tool, "type", None)
+            if tool_type is None or tool_type == "custom":
+                if tool.name and tool.name.strip() and tool.input_schema:
+                    openai_tools.append(
+                        {
+                            "type": Constants.TOOL_FUNCTION,
+                            Constants.TOOL_FUNCTION: {
+                                "name": tool.name,
+                                "description": tool.description or "",
+                                "parameters": tool.input_schema,
+                            },
+                        }
+                    )
         if openai_tools:
             openai_request["tools"] = openai_tools
 
@@ -117,7 +127,9 @@ def convert_claude_to_openai(
         if choice_type == "auto":
             openai_request["tool_choice"] = "auto"
         elif choice_type == "any":
-            openai_request["tool_choice"] = "auto"
+            openai_request["tool_choice"] = "required"
+        elif choice_type == "none":
+            openai_request["tool_choice"] = "none"
         elif choice_type == "tool" and "name" in claude_request.tool_choice:
             openai_request["tool_choice"] = {
                 "type": Constants.TOOL_FUNCTION,
@@ -133,32 +145,98 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
     """Convert Claude user message to OpenAI format."""
     if msg.content is None:
         return {"role": Constants.ROLE_USER, "content": ""}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_USER, "content": msg.content}
 
     # Handle multimodal content
     openai_content = []
     for block in msg.content:
-        if block.type == Constants.CONTENT_TEXT:
-            openai_content.append({"type": "text", "text": block.text})
-        elif block.type == Constants.CONTENT_IMAGE:
-            # Convert Claude image format to OpenAI format
-            if (
-                isinstance(block.source, dict)
-                and block.source.get("type") == "base64"
-                and "media_type" in block.source
-                and "data" in block.source
-            ):
-                openai_content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{block.source['media_type']};base64,{block.source['data']}"
-                        },
-                    }
-                )
+        block_type = getattr(block, "type", None)
 
+        if block_type == Constants.CONTENT_TEXT:
+            openai_content.append({"type": "text", "text": block.text})
+
+        elif block_type == Constants.CONTENT_IMAGE:
+            source = block.source
+            if isinstance(source, dict):
+                if source.get("type") == "base64" and "media_type" in source and "data" in source:
+                    openai_content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{source['media_type']};base64,{source['data']}"
+                            },
+                        }
+                    )
+                elif source.get("type") == "url" and "url" in source:
+                    openai_content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": source["url"]},
+                        }
+                    )
+
+        elif block_type == Constants.CONTENT_DOCUMENT:
+            # Convert document to text representation for OpenAI
+            source = block.source
+            doc_text = ""
+            title = getattr(block, "title", None)
+            context = getattr(block, "context", None)
+
+            if isinstance(source, dict):
+                if source.get("type") == "text":
+                    doc_text = source.get("data", "")
+                elif source.get("type") == "content":
+                    doc_text = str(source.get("content", ""))
+                elif source.get("type") in ("base64", "url"):
+                    # Binary PDF / URL — we can't convert these for OpenAI
+                    doc_text = f"[Document: {title or 'untitled'} — binary content not convertible]"
+
+            parts = []
+            if title:
+                parts.append(f"Document: {title}")
+            if context:
+                parts.append(f"Context: {context}")
+            if doc_text:
+                parts.append(doc_text)
+
+            if parts:
+                openai_content.append({"type": "text", "text": "\n".join(parts)})
+
+        elif block_type == Constants.CONTENT_TOOL_RESULT:
+            # Tool results in user messages that aren't part of the assistant→tool flow
+            # Convert to text
+            content_str = parse_tool_result_content(getattr(block, "content", None))
+            openai_content.append({"type": "text", "text": content_str})
+
+        elif block_type == Constants.CONTENT_SEARCH_RESULT:
+            # Convert search results to text
+            parts = []
+            title = getattr(block, "title", None)
+            source = getattr(block, "source", None)
+            if title:
+                parts.append(f"Search Result: {title}")
+            if source:
+                parts.append(f"Source: {source}")
+            content_list = getattr(block, "content", None)
+            if content_list and isinstance(content_list, list):
+                for item in content_list:
+                    if isinstance(item, dict) and "text" in item:
+                        parts.append(item["text"])
+            if parts:
+                openai_content.append({"type": "text", "text": "\n".join(parts)})
+
+        elif block_type in (Constants.CONTENT_CONTAINER_UPLOAD,):
+            # Skip — not convertible to OpenAI
+            pass
+
+        # Thinking and redacted_thinking in user messages — skip silently
+        elif block_type in (Constants.CONTENT_THINKING, Constants.CONTENT_REDACTED_THINKING):
+            pass
+
+    if not openai_content:
+        return {"role": Constants.ROLE_USER, "content": ""}
     if len(openai_content) == 1 and openai_content[0]["type"] == "text":
         return {"role": Constants.ROLE_USER, "content": openai_content[0]["text"]}
     else:
@@ -166,20 +244,23 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
 
 
 def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
-    """Convert Claude assistant message to OpenAI format."""
+    """Convert Claude assistant message to OpenAI format.
+    Strips thinking/redacted_thinking blocks (OpenAI doesn't support them)."""
     text_parts = []
     tool_calls = []
 
     if msg.content is None:
         return {"role": Constants.ROLE_ASSISTANT, "content": None}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
 
     for block in msg.content:
-        if block.type == Constants.CONTENT_TEXT:
+        block_type = getattr(block, "type", None)
+
+        if block_type == Constants.CONTENT_TEXT:
             text_parts.append(block.text)
-        elif block.type == Constants.CONTENT_TOOL_USE:
+        elif block_type == Constants.CONTENT_TOOL_USE:
             tool_calls.append(
                 {
                     "id": block.id,
@@ -190,6 +271,15 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
                     },
                 }
             )
+        elif block_type in (
+            Constants.CONTENT_THINKING,
+            Constants.CONTENT_REDACTED_THINKING,
+        ):
+            # Strip thinking blocks — not supported by OpenAI
+            pass
+        elif block_type == Constants.CONTENT_SERVER_TOOL_USE:
+            # Strip server tool use — Anthropic-specific
+            pass
 
     openai_message = {"role": Constants.ROLE_ASSISTANT}
 
@@ -212,8 +302,9 @@ def convert_claude_tool_results(msg: ClaudeMessage) -> List[Dict[str, Any]]:
 
     if isinstance(msg.content, list):
         for block in msg.content:
-            if block.type == Constants.CONTENT_TOOL_RESULT:
-                content = parse_tool_result_content(block.content)
+            block_type = getattr(block, "type", None)
+            if block_type == Constants.CONTENT_TOOL_RESULT:
+                content = parse_tool_result_content(getattr(block, "content", None))
                 tool_messages.append(
                     {
                         "role": Constants.ROLE_TOOL,
@@ -246,7 +337,7 @@ def parse_tool_result_content(content):
                 else:
                     try:
                         result_parts.append(json.dumps(item, ensure_ascii=False))
-                    except:
+                    except Exception:
                         result_parts.append(str(item))
         return "\n".join(result_parts).strip()
 
@@ -255,10 +346,10 @@ def parse_tool_result_content(content):
             return content.get("text", "")
         try:
             return json.dumps(content, ensure_ascii=False)
-        except:
+        except Exception:
             return str(content)
 
     try:
         return str(content)
-    except:
+    except Exception:
         return "Unparseable content"
