@@ -73,14 +73,14 @@ def convert_claude_to_openai(
 
         i += 1
 
-    # Build OpenAI request
+    # Build OpenAI request — resolve max_tokens from backend model limits
+    resolved_max_tokens = model_manager.resolve_max_tokens(
+        claude_request.max_tokens, openai_model
+    )
     openai_request = {
         "model": openai_model,
         "messages": openai_messages,
-        "max_tokens": min(
-            max(claude_request.max_tokens, config.min_tokens_limit),
-            config.max_tokens_limit,
-        ),
+        "max_tokens": resolved_max_tokens,
         "stream": claude_request.stream,
     }
 

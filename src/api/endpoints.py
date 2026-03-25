@@ -66,6 +66,9 @@ async def create_message(
             f"Processing Claude request: model={request.model}, stream={request.stream}"
         )
 
+        # Lazily load backend model capabilities on first request
+        await model_manager.load_models(openai_client)
+
         # Generate unique request ID for cancellation tracking
         request_id = str(uuid.uuid4())
 
