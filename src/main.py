@@ -22,12 +22,12 @@ def main():
         print("  ANTHROPIC_API_KEY - Expected API key for client validation")
         print("                      If set, clients must provide this exact key")
         print(
-            f"  OPENAI_BASE_URL - Backend API base URL (default: https://api.openai.com/v1)"
+            f"  OPENAI_BASE_URL - Backend API base URL (default: https://openrouter.ai/api/v1)"
         )
         print(f"  AZURE_API_VERSION - Azure OpenAI API version (enables Azure mode)")
-        print(f"  BIG_MODEL - Model for opus requests (default: gpt-4o)")
-        print(f"  MIDDLE_MODEL - Model for sonnet requests (default: same as BIG_MODEL)")
-        print(f"  SMALL_MODEL - Model for haiku requests (default: gpt-4o-mini)")
+        print(f"  BIG_MODEL - Model for opus requests (default: openai/gpt-5.4)")
+        print(f"  MIDDLE_MODEL - Model for sonnet requests (default: openai/gpt-5.4-mini)")
+        print(f"  SMALL_MODEL - Model for haiku requests (default: openai/gpt-5.4-nano)")
         print(f"  HOST - Server host (default: 0.0.0.0)")
         print(f"  PORT - Server port (default: 8082)")
         print(f"  LOG_LEVEL - Logging level (default: INFO)")

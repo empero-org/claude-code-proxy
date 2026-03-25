@@ -27,7 +27,8 @@ Claude Code / Anthropic SDK          This Proxy               Any OpenAI-compati
 - **Streaming** — real-time SSE with incremental `partial_json` tool argument deltas
 - **Auto model limits** — queries the backend `/v1/models` endpoint on startup, clamps `max_tokens` to what the backend actually supports
 - **Smart model mapping** — `opus` → BIG_MODEL, `sonnet` → MIDDLE_MODEL, `haiku` → SMALL_MODEL
-- **Provider passthrough** — GPT, o1/o3/o4, DeepSeek, Gemini, Mistral, LLaMA, Qwen models forwarded as-is
+- **OpenRouter by default** — works out of the box with an OpenRouter key, supports every model on the platform
+- **Provider passthrough** — OpenRouter namespaced models, xAI/Grok, GPT, o1/o3/o4, DeepSeek, Gemini, Mistral, LLaMA, Qwen forwarded as-is
 - **Client auth** — optional API key gating via `ANTHROPIC_API_KEY`
 - **Azure support** — set `AZURE_API_VERSION` to enable Azure OpenAI mode
 - **Custom headers** — inject arbitrary headers via `CUSTOM_HEADER_*` env vars
@@ -53,6 +54,7 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # Edit .env — at minimum set OPENAI_API_KEY
+# Default backend is OpenRouter (https://openrouter.ai/keys)
 ```
 
 ### 3. Run
@@ -93,16 +95,16 @@ All config is via environment variables (auto-loaded from `.env`).
 
 | Variable | Maps from | Default |
 |----------|-----------|---------|
-| `BIG_MODEL` | Claude opus models | `gpt-4o` |
-| `MIDDLE_MODEL` | Claude sonnet models | same as `BIG_MODEL` |
-| `SMALL_MODEL` | Claude haiku models | `gpt-4o-mini` |
+| `BIG_MODEL` | Claude opus models | `openai/gpt-5.4` |
+| `MIDDLE_MODEL` | Claude sonnet models | `openai/gpt-5.4-mini` |
+| `SMALL_MODEL` | Claude haiku models | `openai/gpt-5.4-nano` |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | _(none)_ | If set, clients must send this exact key |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Backend API URL |
+| `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | Backend API URL |
 | `AZURE_API_VERSION` | _(none)_ | Set to enable Azure OpenAI mode |
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8082` | Server port |
@@ -149,11 +151,28 @@ PROMPT_MAX_SYSTEM_TOKENS="4096"
 
 ### Provider examples
 
-**OpenAI**
+**OpenRouter (default — no config needed)**
+```bash
+OPENAI_API_KEY="sk-or-..."
+# That's it — defaults point to OpenRouter with GPT-5.4 models
+```
+
+**OpenAI direct**
 ```bash
 OPENAI_API_KEY="sk-..."
-BIG_MODEL="gpt-4o"
-SMALL_MODEL="gpt-4o-mini"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+BIG_MODEL="gpt-5.4"
+MIDDLE_MODEL="gpt-5.4-mini"
+SMALL_MODEL="gpt-5.4-nano"
+```
+
+**xAI (Grok)**
+```bash
+OPENAI_API_KEY="xai-..."
+OPENAI_BASE_URL="https://api.x.ai/v1"
+BIG_MODEL="grok-3"
+MIDDLE_MODEL="grok-3-mini"
+SMALL_MODEL="grok-3-mini"
 ```
 
 **Azure OpenAI**
@@ -171,6 +190,7 @@ OPENAI_API_KEY="dummy"
 OPENAI_BASE_URL="http://localhost:11434/v1"
 BIG_MODEL="llama3.1:70b"
 SMALL_MODEL="llama3.1:8b"
+PROMPT_COMPRESSION="compact"
 ```
 
 **DeepSeek**

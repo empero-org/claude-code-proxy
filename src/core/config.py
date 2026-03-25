@@ -13,7 +13,7 @@ class Config:
         if not self.anthropic_api_key:
             print("Warning: ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
         
-        self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
         self.azure_api_version = os.environ.get("AZURE_API_VERSION")  # For Azure OpenAI
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
@@ -26,9 +26,9 @@ class Config:
         self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
         
         # Model settings - BIG and SMALL models
-        self.big_model = os.environ.get("BIG_MODEL", "gpt-4o")
-        self.middle_model = os.environ.get("MIDDLE_MODEL", self.big_model)
-        self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
+        self.big_model = os.environ.get("BIG_MODEL", "openai/gpt-5.4")
+        self.middle_model = os.environ.get("MIDDLE_MODEL", "openai/gpt-5.4-mini")
+        self.small_model = os.environ.get("SMALL_MODEL", "openai/gpt-5.4-nano")
 
         # Prompt compression settings
         self.prompt_compression = os.environ.get("PROMPT_COMPRESSION", "none").lower()

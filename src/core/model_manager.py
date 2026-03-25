@@ -82,7 +82,15 @@ class ModelManager:
         if claude_model.startswith(("gpt-", "o1-", "o3-", "o4-")):
             return claude_model
 
-        # If it's other supported provider models, return as-is
+        # OpenRouter namespaced models (e.g. openai/gpt-5.4, google/gemini-2.5-pro)
+        if "/" in claude_model:
+            return claude_model
+
+        # xAI / Grok models
+        if claude_model.startswith(("grok-", "xai-")):
+            return claude_model
+
+        # Other supported provider models, return as-is
         if claude_model.startswith(("ep-", "doubao-", "deepseek-", "gemini-",
                                      "mistral-", "llama-", "qwen-")):
             return claude_model
