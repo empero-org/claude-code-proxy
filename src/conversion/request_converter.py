@@ -76,10 +76,20 @@ async def convert_claude_to_openai(
                         for block in next_msg.content
                     )
                 ):
-                    # Process tool results
                     i += 1  # Skip to tool result message
+
+                    # Extract tool results as OpenAI tool messages
                     tool_results = convert_claude_tool_results(next_msg)
                     openai_messages.extend(tool_results)
+
+                    # Also extract any non-tool-result text from the same
+                    # message so context isn't silently dropped (e.g. the
+                    # compact summary or user text mixed with tool results).
+                    extra_text = _extract_non_tool_text(next_msg)
+                    if extra_text:
+                        openai_messages.append(
+                            {"role": Constants.ROLE_USER, "content": extra_text}
+                        )
 
         i += 1
 
@@ -363,6 +373,22 @@ def parse_tool_result_content(content):
         return str(content)
     except Exception:
         return "Unparseable content"
+
+
+def _extract_non_tool_text(msg: ClaudeMessage) -> str:
+    """Extract text/document content from a user message, ignoring tool_result blocks."""
+    parts = []
+    if not isinstance(msg.content, list):
+        return ""
+    for block in msg.content:
+        block_type = getattr(block, "type", None)
+        if block_type == Constants.CONTENT_TEXT:
+            parts.append(block.text)
+        elif block_type == Constants.CONTENT_DOCUMENT:
+            source = getattr(block, "source", None) or {}
+            if isinstance(source, dict) and source.get("type") == "text":
+                parts.append(source.get("data", ""))
+    return "\n".join(parts).strip()
 
 
 async def _compress_system_prompt(
