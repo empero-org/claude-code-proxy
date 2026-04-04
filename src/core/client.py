@@ -131,7 +131,10 @@ class OpenAIClient:
             
             # Signal end of stream
             yield "data: [DONE]"
-                
+
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. client disconnected) — just stop yielding
+            return
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
@@ -141,9 +144,18 @@ class OpenAIClient:
         except APIError as e:
             status_code = getattr(e, 'status_code', 500)
             raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
+        except HTTPException:
+            raise
         except Exception as e:
+            error_str = str(e).lower()
+            # Client disconnection errors — stop silently instead of raising
+            if any(phrase in error_str for phrase in [
+                "network connection lost", "connection reset", "broken pipe",
+                "connection closed", "client disconnected", "eof occurred",
+            ]):
+                return
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-        
+
         finally:
             # Clean up active request tracking
             if request_id and request_id in self.active_requests:

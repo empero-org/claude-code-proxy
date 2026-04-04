@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from datetime import datetime
+import asyncio
 import uuid
 from typing import Optional
 
@@ -16,6 +17,10 @@ from src.conversion.response_converter import (
 from src.core.model_manager import model_manager
 
 router = APIRouter()
+
+# Serialize streaming requests so only one runs at a time.
+# New requests wait for the current stream to finish (like the real Anthropic API).
+_stream_lock = asyncio.Lock()
 
 # Get custom headers from config
 custom_headers = config.get_custom_headers()
@@ -104,38 +109,66 @@ async def _handle_message(
             raise HTTPException(status_code=499, detail="Client disconnected")
 
         if request.stream:
-            # Streaming response
+            # Streaming response with request serialization.
+            # Wait for any active stream to finish before starting a new one,
+            # matching the real Anthropic API's queuing behaviour.
+            await _stream_lock.acquire()
+
             try:
                 openai_stream = openai_client.create_chat_completion_stream(
                     openai_request, request_id
                 )
-                return StreamingResponse(
-                    convert_openai_streaming_to_claude_with_cancellation(
-                        openai_stream,
-                        request,
-                        logger,
-                        http_request,
-                        openai_client,
-                        request_id,
-                    ),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Headers": "*",
-                    },
-                )
             except HTTPException as e:
+                _stream_lock.release()
                 logger.error(f"Streaming error: {e.detail}")
-                import traceback
-                logger.error(traceback.format_exc())
                 error_message = openai_client.classify_openai_error(e.detail)
                 error_response = {
                     "type": "error",
                     "error": {"type": "api_error", "message": error_message},
                 }
                 return JSONResponse(status_code=e.status_code, content=error_response)
+            except Exception as e:
+                _stream_lock.release()
+                raise
+
+            # Queue decouples upstream consumption from the client connection.
+            # The upstream runs to completion even if the client disconnects,
+            # so we don't waste tokens / leave partial requests hanging.
+            chunk_queue = asyncio.Queue()
+
+            async def _consume_upstream():
+                """Drain the full upstream through the converter into the queue, then release the lock."""
+                try:
+                    async for sse_chunk in convert_openai_streaming_to_claude_with_cancellation(
+                        openai_stream, request, logger, http_request, openai_client, request_id,
+                    ):
+                        await chunk_queue.put(sse_chunk)
+                except Exception as e:
+                    logger.error(f"Upstream consumption error: {e}")
+                finally:
+                    await chunk_queue.put(None)  # sentinel
+                    _stream_lock.release()
+
+            asyncio.create_task(_consume_upstream())
+
+            async def _yield_from_queue():
+                """Yield SSE chunks to the client from the queue."""
+                while True:
+                    chunk = await chunk_queue.get()
+                    if chunk is None:
+                        break
+                    yield chunk
+
+            return StreamingResponse(
+                _yield_from_queue(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
         else:
             # Non-streaming response
             openai_response = await openai_client.create_chat_completion(

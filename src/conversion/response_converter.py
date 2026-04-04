@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from fastapi import HTTPException, Request
@@ -249,12 +250,6 @@ async def convert_openai_streaming_to_claude_with_cancellation(
 
     try:
         async for line in openai_stream:
-            # Check if client disconnected
-            if await http_request.is_disconnected():
-                logger.info(f"Client disconnected, cancelling request {request_id}")
-                openai_client.cancel_request(request_id)
-                break
-
             if line.strip():
                 if line.startswith("data: "):
                     chunk_data = line[6:]
@@ -314,10 +309,28 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                 "type": "error",
                 "error": {"type": "cancelled", "message": "Request was cancelled by client"},
             })
-            return
         else:
-            raise
+            # Can't send HTTP error responses once streaming has started —
+            # emit an SSE error event instead of re-raising.
+            logger.error(f"HTTP error during streaming (status={e.status_code}): {e.detail}")
+            yield _sse(Constants.EVENT_ERROR, {
+                "type": "error",
+                "error": {"type": "api_error", "message": str(e.detail)},
+            })
+        return
+    except asyncio.CancelledError:
+        # Client disconnected — stop silently
+        logger.info(f"Request {request_id} stream cancelled (client disconnected)")
+        return
     except Exception as e:
+        error_str = str(e).lower()
+        # Client disconnection errors — stop silently
+        if any(phrase in error_str for phrase in [
+            "network connection lost", "connection reset", "broken pipe",
+            "connection closed", "client disconnected", "eof occurred",
+        ]):
+            logger.info(f"Request {request_id} stream ended (client disconnected): {e}")
+            return
         logger.error(f"Streaming error: {e}")
         import traceback
         logger.error(traceback.format_exc())
