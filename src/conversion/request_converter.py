@@ -93,6 +93,14 @@ async def convert_claude_to_openai(
 
         i += 1
 
+    # For non-Claude models handling compaction requests, append a format
+    # enforcer so the model actually produces the <analysis>/<summary> tags
+    # that Claude Code expects to parse from the response.
+    if _is_compaction_request(system_text if claude_request.system else "", openai_messages):
+        if not openai_model.startswith("claude"):
+            _append_compaction_enforcer(openai_messages)
+            logger.info(f"Compaction request detected — added format enforcer for {openai_model}")
+
     # Build OpenAI request — resolve max_tokens from backend model limits
     resolved_max_tokens = model_manager.resolve_max_tokens(
         claude_request.max_tokens, openai_model
@@ -373,6 +381,53 @@ def parse_tool_result_content(content):
         return str(content)
     except Exception:
         return "Unparseable content"
+
+
+def _is_compaction_request(system_text: str, messages: list) -> bool:
+    """Detect whether this request is a Claude Code compaction/summary call."""
+    # Primary signal: the compaction system prompt
+    if "summarizing conversations" in system_text.lower():
+        return True
+    # Fallback: check last user message for compaction keywords
+    for msg in reversed(messages):
+        if msg.get("role") == Constants.ROLE_USER:
+            content = msg.get("content", "")
+            if isinstance(content, str) and "<summary>" in content and "<analysis>" in content:
+                return True
+            break
+    return False
+
+
+_COMPACTION_ENFORCER = (
+    "\n\n---\n"
+    "IMPORTANT — OUTPUT FORMAT REQUIREMENTS:\n"
+    "You MUST structure your entire response as two XML-tagged blocks and nothing else:\n\n"
+    "1. <analysis> — Your detailed chronological walkthrough of the conversation.\n"
+    "2. <summary> — The final structured summary with these numbered sections:\n"
+    "   1. Primary Request and Intent\n"
+    "   2. Key Technical Concepts\n"
+    "   3. Files and Code Sections (include exact file paths and relevant snippets)\n"
+    "   4. Errors and Fixes\n"
+    "   5. Problem Solving\n"
+    "   6. All User Messages (preserve every user instruction, not tool results)\n"
+    "   7. Pending Tasks\n"
+    "   8. Current Work (be very specific — file names, line numbers, code)\n"
+    "   9. Optional Next Step\n\n"
+    "Do NOT call any tools. Do NOT wrap your response in markdown code fences.\n"
+    "Start your response with <analysis> immediately."
+)
+
+
+def _append_compaction_enforcer(messages: list) -> None:
+    """Append format enforcement to the last user message."""
+    for msg in reversed(messages):
+        if msg.get("role") == Constants.ROLE_USER:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                msg["content"] = content + _COMPACTION_ENFORCER
+            elif isinstance(content, list):
+                msg["content"].append({"type": "text", "text": _COMPACTION_ENFORCER})
+            return
 
 
 def _extract_non_tool_text(msg: ClaudeMessage) -> str:
