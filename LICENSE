@@ -1,6 +1,7 @@
-MIT License
+Empero License
+(Modified MIT License with Attribution Requirement and Commercial Licensing)
 
-Copyright (c) 2026 L. Lehmann (kodee2k) — Empero AI (https://empero.ai)
+Copyright (c) 2026 Leon Lehmann and Empero AI (https://empero.org)
 Copyright (c) 2024 fuergaosi233 (original project)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -10,8 +11,26 @@ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+2. Attribution. Any use, distribution, or derivative work of the Software --
+   including any product or service built on, derived from, or incorporating it
+   -- must give clear and visible credit to the original "fusionchat" project by
+   Leon Lehmann and Empero AI (https://empero.org), together with a link to the
+   original source repository (https://github.com/empero-org/fusionchat). This
+   credit must appear in user-facing documentation (such as a README, an
+   "About" page, or a documentation site) and must not be removed, hidden, or
+   obscured.
+
+3. Commercial Licensing. Commercial projects, products, or services that
+   incorporate, derive from, build upon, or otherwise use the Software for
+   commercial purposes (including offering it as part of a paid product or
+   service) require prior written approval and a separate direct commercial
+   license from the copyright holders, Leon Lehmann and Empero AI. The
+   permissions granted under this open-source license do not extend to
+   commercial use. For commercial licensing inquiries, please contact us via
+   https://empero.org.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -19,4 +38,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+SOFTWARE. 
